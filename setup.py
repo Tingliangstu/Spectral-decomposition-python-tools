@@ -6,7 +6,7 @@ import sys
 
 # Package meta-data.
 NAME = 'sdhc'
-DESCRIPTION = 'Tools for computing spectral heat current distribution using LAMMPS simulations'
+DESCRIPTION = 'Tools for computing spectral heat current distribution using LAMMPS NEMD simulations'
 URL = 'https://github.com/Tingliangstu/Spectral-decomposition-python-tools'
 EMAIL = 'ksaaskil@gmail.com and liangting.zj@gmail.com'
 AUTHOR = 'Kimmo S\"a\"askilahti and modify by Liang Ting'

@@ -1,0 +1,218 @@
+## ***************** Initialization # basis  ***************
+units                        metal
+dimension                      3
+boundary                    p   p   p
+atom_style                    atomic
+atom_modify                  map      hash
+
+# ****************** Read restart file *****************
+
+read_restart            optimize.restart       # The statement "atom_modify map hash" must be added to the 'in file' that generates the restart file
+
+# mass
+# First layer
+
+mass                       1     10.811000    #  B1
+mass                       2     12.010700    #  C1
+mass                       3     14.006700    #  N1
+
+# *******************  Define a few parameters  ********************** 
+
+variable              T        equal  300                        # Average temperature   300K
+variable              DT       equal  0.0005                     # Timestep    0.5fs   (Read from the restart file)
+
+# *******************  Fix some atoms to avoid drift ******************
+
+variable              filetowrite   string        Fij.dat        # For generating the force constant
+
+# *********************  Potential  function setting  *****************
+
+pair_style                 tersoff
+pair_coeff            *      *           BNC.tersoff        B        C       N
+
+timestep              ${DT}
+
+#  *************************  The following to  divide  block ***********************
+#  *************************  For Y direction  **************************************
+
+variable         y_max        equal           ly
+variable         P            equal     ${y_max}/2-100
+variable         P1           equal     ${y_max}/2+100
+
+variable         tmp1         equal     ${P1}-${P}
+variable         tmp          equal     ${tmp1}/40
+variable        middle        equal     ${y_max}/2 
+
+variable         L1           equal     ${P}+3*${tmp}
+variable         R1           equal     ${P1}-3*${tmp}
+
+region          lfixed     block     INF   INF        INF              ${P}                 INF   INF    units box
+region          rfixed     block     INF   INF       ${P1}             INF                  INF   INF    units box
+
+region          hot        block     INF   INF       ${P}              ${L1}                INF   INF    units box
+region          cold       block     INF   INF       ${R1}             ${P1}                INF   INF    units box
+
+region          fixed      union     2     lfixed    rfixed
+
+region          main       block     INF   INF       ${P}              ${P1}                INF   INF    units box
+
+region          main_nvt   block     INF   INF       ${L1}             ${R1}                INF   INF    units box
+
+
+group           lfixed      region       lfixed
+group           rfixed      region       rfixed
+group           hot         region       hot
+group           cold        region       cold
+
+group           main        region       main
+group           main_nvt    region       main_nvt
+
+## *****************  Frozen atomic group  **************         
+                    
+group           freeze      region       fixed
+
+##*****************  Velocity groups for transmission calculation  *****************
+
+variable        dmid         equal             6                                    ## Set to 6 (A) here
+variable        mid_left     equal     ${middle}-${dmid}
+variable        mid_right    equal     ${middle}+${dmid}
+
+region          int_L        block     INF  INF         ${mid_left}        ${middle}            INF   INF    units box
+region          int_R        block     INF  INF         ${middle}          ${mid_right}         INF   INF    units box
+
+group           interface_L  region    int_L
+group           interface_R  region    int_R
+group           interface    union     interface_L     interface_R
+
+##  **************  Freeze (Freeze some of the atoms of the model)  **************
+
+velocity         freeze    set       0.0   0.0   0.0    units box
+fix              3        freeze     nve/noforce                   
+
+## ***************  Calculate some thermodymanic quantities  *******************
+
+compute 	       fxfyfz     interface     property/atom   fx   fy   fz
+compute 	       fxs        interface     property/atom   fx
+compute 	       fys        interface     property/atom   fy
+compute 	       fzs        interface     property/atom   fz
+
+## ****************  Sampling data and run 0 *****************
+
+fix              1          main          nve
+
+variable 	       N          equal    "count(all)"
+variable	       NL         equal    "count(interface_L)"
+variable 	       NR         equal    "count(interface_R)"
+
+## ****************** Initialize groups-  ********************
+
+group            atoms_id    id        1
+
+variable         hstep       equal    0.01                     # Amount of displacement
+variable         hstepm2     equal    -2*v_hstep               # Negative
+
+print            'hstepm2 = ${hstepm2}'                        # Print it if you need 
+
+shell            rm          ${filetowrite}
+
+dump 		         helpdump    interface   custom   1   ${filetowrite}   id   c_fxs   c_fys   c_fzs
+dump_modify 	   helpdump    sort        id
+dump_modify      helpdump    append      yes
+
+## ***************** Write the interface particle id and type to ${filetowrite} ****************
+
+print 		 "NL  ${NL}"  append  ${filetowrite}
+print  		 "NR  ${NR}"  append  ${filetowrite}
+
+label            loop_i
+
+variable 	       i     loop    $N
+
+        variable 	    yi             equal     y[${i}]
+        variable 	  boolleft         equal     (y[${i}]<${middle})&&(y[${i}]>=${mid_left})
+        variable 	  boolright        equal     (y[${i}]>${middle})&&(y[${i}]<=${mid_right})
+#       print 	  	"${i}   ${boolleft}    ${boolright}"                                     # Uncomment if you need to visualize data
+        if 		      "${boolleft}"    then &
+                		    "print  '${i}   1'  append   ${filetowrite}"
+        if 		      "${boolright}"   then &
+                		    "print  '${i}   2'  append   ${filetowrite}"
+        next 		 i
+
+jump 		SELF  loop_i
+
+## ***************** Loop over atoms on one side, compute forces in all others *************
+
+print 		      "HSTEP   ${hstep}"     append     ${filetowrite}
+thermo_modify 	    flush     yes
+
+variable 	 counter   equal   0                    ##  Define a counter
+
+## Next loop function
+
+label            loop_j
+
+variable 	       j     loop    $N
+
+        variable 	    yi             equal     y[${j}]
+        variable 	  boolleft         equal     (${yi}<${middle})&&(${yi}>=${mid_left})
+        variable 	  boolright        equal     (${yi}>${middle})&&(${yi}<=${mid_right})
+        
+#       print 	  	"${j}    ${boolleft}    ${boolright}"                                # Uncomment if you need to visualize data
+        if 		      "!${boolleft}"    then &
+                   			              "next  j" &
+            		   	                  "jump  SELF  loop_j" &
+            		  	                  "jump  SELF  final_break"
+        group 		atoms_id    delete 
+        group     atoms_id    id        ${j}
+        
+        # ********* X-direction displacement to positive and negative direction **********
+        
+        displace_atoms    atoms_id    move     ${hstep}    0     0
+        variable 		      counter     equal    ${counter}+1
+        reset_timestep 	  ${counter}
+        print 		      	"counter=${counter}"
+        run 		        	    0                                    ##  Update the forces in the compute
+        
+        displace_atoms 	  atoms_id    move     ${hstepm2}  0     0
+        variable 	      	counter     equal    ${counter}+1
+        reset_timestep 	  ${counter}
+        print 		      	"counter=${counter}"
+        run 		        	    0                                    ##  Update the forces in the compute
+        
+        displace_atoms    atoms_id    move     ${hstep}    0     0  
+        
+        # ********* Y-direction displacement to positive and negative direction ********** 
+        
+        displace_atoms    atoms_id    move     0    ${hstep}     0
+        variable 		      counter     equal    ${counter}+1
+        reset_timestep 	  ${counter}
+        print 		      	"counter=${counter}"
+        run 		        	    0                                    ##  Update the forces in the compute                      
+
+        displace_atoms 	  atoms_id    move     0    ${hstepm2}   0
+        variable 	      	counter     equal    ${counter}+1
+        reset_timestep 	  ${counter}
+        print 		      	"counter=${counter}"
+        run 		        	    0                                    ## Update the forces in the compute
+        
+        displace_atoms    atoms_id    move     0    ${hstep}     0
+        
+        # ********* Z-direction displacement to positive and negative direction ********** 
+        
+        displace_atoms    atoms_id    move     0      0      ${hstep}
+        variable 		      counter     equal    ${counter}+1
+        reset_timestep 	  ${counter}
+        print 		      	"counter=${counter}"
+        run 		        	    0                                    ##  Update the forces in the compute                      
+
+        displace_atoms 	  atoms_id    move     0      0      ${hstepm2}
+        variable 	      	counter     equal    ${counter}+1
+        reset_timestep 	  ${counter}
+        print 		      	"counter=${counter}"
+        run 		        	    0                                    ## Update the forces in the compute
+        
+        displace_atoms    atoms_id    move     0      0      ${hstep}  
+              		  	                              		  	                  
+next 		    j
+jump 	    	SELF     loop_j
+label 	   	final_break

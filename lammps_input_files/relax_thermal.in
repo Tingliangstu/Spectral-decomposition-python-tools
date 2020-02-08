@@ -1,0 +1,301 @@
+## ***************** Initialization # basis  ***************
+units                        metal
+dimension                      3
+boundary                    p   p   p
+atom_style                   atomic
+atom_modify                 map      hash
+# ****************** read data  *****************
+read_data                    onelayer.data
+
+# mass
+# First layer
+mass                       1     10.811000    #  B1
+mass                       2     12.010700    #  C1
+mass                       3     14.006700    #  N1
+
+# *******************  Define a few parameters  ********************** 
+
+variable              T        equal  300                        # average temperature   300K
+variable              DT       equal  0.0005                     # timestep    0.5fs   (Read from the restart file)
+variable              T_low    equal  270                        # Heat sink             270K
+variable              T_hight  equal  330                        # Heat source           330K
+
+variable              restartfile  string   optimize.restart     # Write the restart file in preparation for generating the force constant
+
+# *********************  Potential  function setting  *****************
+
+pair_style                 tersoff
+pair_coeff            *      *           BNC.tersoff        B        C       N
+
+# *********************  thermo output  ************************
+
+thermo                1000
+thermo_style      custom  step  temp  lx  ly  lz  press  vol  pxx  pyy  pzz  pe  ke  etotal  #energy output
+
+## *********************** Initialization ##relaxation< ***********************
+## ***********************   Optimize at  0 K  ***********************
+## ***********************  Static equilibrium  **************************
+
+dump               1  all  custom  1000  dump.minimization  id  type  x  y  z  # Output the minimum structure, see whether the structure is reasonable
+dump_modify        1  sort  id
+
+#neighbor          0.3    bin
+#neigh_modify      once   yes          ### Generally no Settings are required
+
+fix                1  all  nve
+min_style          cg   
+minimize           1.0e-5 1.0e-8 1000000 1000000
+undump             1
+unfix              1
+
+#  *************************  Set velocity at 300K  **********************
+
+reset_timestep                   0                                                        # Time reset         
+velocity             all  create  ${T}  619206  mom  yes  rot  yes  dist  gaussian        # Setting Random  seed
+
+#  *************************  The following to  divide  block ***********************
+#  *************************  For Y direction  **************************************
+
+variable         y_max        equal           ly
+variable         P            equal     ${y_max}/2-100
+variable         P1           equal     ${y_max}/2+100
+
+variable         tmp1         equal     ${P1}-${P}
+variable         tmp          equal     ${tmp1}/40
+
+variable         L1           equal     ${P}+3*${tmp}
+variable         R1           equal     ${P1}-3*${tmp}
+
+region          lfixed     block     INF   INF        INF              ${P}                 INF   INF    units box
+region          rfixed     block     INF   INF       ${P1}             INF                  INF   INF    units box
+
+region          hot        block     INF   INF       ${P}              ${L1}                INF   INF    units box
+region          cold       block     INF   INF       ${R1}             ${P1}                INF   INF    units box
+
+region          fixed      union     2     lfixed    rfixed
+
+region          main       block     INF   INF       ${P}              ${P1}                INF   INF    units box
+
+region          main_nvt   block     INF   INF       ${L1}             ${R1}                INF   INF    units box
+
+
+group           lfixed      region       lfixed
+group           rfixed      region       rfixed
+group           hot         region       hot
+group           cold        region       cold
+
+group           main        region       main
+group           main_nvt    region       main_nvt
+
+## *****************  Frozen atomic group  **************         
+                    
+group           freeze      region       fixed
+
+## *****************  Group layer_1 (Gr)  *****************
+
+#group            Gr                type         4           # If you need 
+
+## *****************  Group layer_2 (Gr_Hbn)  **************
+
+group            Gr_Hbn            type         1   2   3
+	
+##*****************  Divide the zone into blocks for extracting the temperature blocks  *****************
+
+variable          average_40        equal           (${P1}-${P})/40
+variable          average_50        equal           (${P1}-${P})/50
+variable            middle          equal              ${y_max}/2 
+variable          average_1         equal           (${middle}-${P})/20
+variable          average_2         equal           (${P1}-${middle})/20
+
+region          main_1       block     INF  INF         ${P}             ${middle}          INF   INF    units box
+region          main_2       block     INF  INF         ${middle}        ${P1}              INF   INF    units box
+region          main_main    block     INF  INF         ${P}             ${P1}              INF   INF    units box
+
+group           main_1       region    main_1
+group           main_2       region    main_2
+group           main_main    region    main_main
+
+##*****************  Velocity groups for transmission calculation  *****************
+
+variable        dmid         equal             6                                    ## Set to 6 (A) here
+variable        mid_left     equal     ${middle}-${dmid}
+variable        mid_right    equal     ${middle}+${dmid}
+
+region          int_L        block     INF  INF         ${mid_left}        ${middle}            INF   INF    units box
+region          int_R        block     INF  INF         ${middle}          ${mid_right}         INF   INF    units box
+
+group           interface_L  region    int_L
+group           interface_R  region    int_R
+group           interface    union     interface_L     interface_R
+
+##  **************  Freeze (Freeze some of the atoms of the model)  **************
+
+velocity         freeze    set       0.0   0.0   0.0    units box
+fix              3        freeze     nve/noforce                   
+
+## ***************  Calculate some thermodymanic quantities  *******************
+
+compute          Thot     hot        temp/region        hot
+compute          Tcold    cold       temp/region        cold
+compute          Ftemp    freeze     temp/region        fixed
+
+# ****************  Compute temperature  *****************
+
+compute	          ALLKe      all     ke/atom                    
+variable          KB         equal   8.625e-5                    
+variable          TEMP       atom    c_ALLKe/1.5/${KB} 
+fix               Totaltemperatom    all     ave/atom      10   50000   500000   v_TEMP
+
+# ****************  Now optimize at 300K  ********************
+# ****************  The 1nd equilibration run  ********************
+
+fix                1      main      nvt     temp     ${T}    ${T}    0.1
+dump               1      all      custom   500000   dump.optimize   id   type   x   y   z   f_Totaltemperatom 
+dump_modify        1      sort id                                                                                 ## Sort each atom                                                                       
+
+thermo_style       custom   step    temp   lx   ly   lz   c_Thot   c_Tcold   c_Ftemp  press  pe  ke  etotal 
+thermo	           1000
+
+## Set the time_step
+
+timestep                    ${DT}
+
+#restart
+#restart           500000    optimize.*.restart
+
+run		             3000000
+
+undump              1
+unfix               1
+
+#minimize           0     1.0e-3    1000    1000                      # (optional)
+min_style           cg   
+minimize            1.0e-5    1.0e-8    1000000   1000000
+
+run                 0
+
+write_restart      ${restartfile}
+
+write_data         data.pos        nocoeff
+
+variable           v1      equal     xlo
+variable           v2      equal     xhi
+variable           v3      equal     ylo
+variable           v4      equal     yhi
+variable           v5      equal     zlo
+variable           v6      equal     zhi
+print              "**************  The  system  boundaries  are  ****************"
+print              " X-direction is ---------*  ${v1}    ${v2} *-----------(A)"
+print              " Y-direction is ---------*  ${v3}    ${v4} *-----------(A)"
+print              " Z-direction is ---------*  ${v5}    ${v6} *-----------(A)"
+
+print    "*********** You can use the restart file for the 2nd equilibration run  (for thermal transport) **************"
+print    "******************   You can also use the restart file to generate force constant files   **************"
+
+
+#  ************************ The second stage  **********************
+#  ************************ The 2nd equilibration run  **********************
+#  ************************ Write  a  shell  script  to  generate velocity random number  *******************
+
+variable           hot_velocity       equal        611535
+variable           cold_velocity      equal        27117
+variable           random_seed        equal        0.1                ## To get excellent kinetic properties, this is a good choice
+
+fix                1       main          nve
+fix                Hot     hot       langevin    ${T_hight}  ${T_hight}     ${random_seed}     ${hot_velocity}     tally   yes
+fix                Cold    cold      langevin    ${T_low}    ${T_low}       ${random_seed}     ${cold_velocity}    tally   yes    #langevin
+
+## Uncomment and use VMD to check that interface definitions are what you expect
+
+dump               1      all         custom   500000   dump.relaxation  id   type   x   y   z   f_Totaltemperatom
+dump_modify        1      sort  id
+
+dump               2      main_main   custom   500000   dump.main   id   type   x   y   z   f_Totaltemperatom
+dump_modify        2      sort  id
+
+dump               3      main_1      custom   500000   dump.hot    id   type   x   y   z   f_Totaltemperatom
+dump_modify        3      sort  id
+
+dump               4      main_2      custom   500000   dump.cold   id   type   x   y   z   f_Totaltemperatom
+dump_modify        4      sort  id
+
+## Write interfacial structure to file for Ovito visualization
+
+dump               5      interface   custom   500000   dump.interface    id   type   x   y   z   f_Totaltemperatom
+dump_modify        5      sort  id
+
+
+variable           tdiff    equal   c_Thot-c_Tcold
+
+thermo_style       custom   step    temp   lx   ly   lz   c_Thot   c_Tcold   c_Ftemp   f_Hot   f_Cold  v_tdiff 
+thermo	           1000
+
+run                4000000 
+
+unfix              Totaltemperatom
+undump             1
+undump             2
+undump             3
+undump             4
+undump             5
+
+# **************************  Collect Velocities for the calculation of force constants *************************
+
+variable           dn     equal  10            
+
+dump               vels   interface   custom    ${dn}   vels.dat   id   type   vx   vy   vz
+dump_modify        vels   format      line      "%d   %d   %0.8g   %0.8g   %0.8g"
+dump_modify        vels   sort        id
+
+dump               vels_L   interface_L custom    ${dn}   force_vels_left.dat  id  type  fx  fy  fz  vx  vy  vz
+dump_modify        vels_L   format      line      "%d   %d   %0.8g   %0.8g   %0.8g   %0.8g   %0.8g   %0.8g"
+dump_modify        vels_L   sort        id
+
+dump               vels_R   interface_R custom    ${dn}   force_vels_right.dat  id  type  fx  fy fz  vx  vy  vz
+dump_modify        vels_R   format      line      "%d   %d   %0.8g   %0.8g   %0.8g   %0.8g   %0.8g   %0.8g"
+dump_modify        vels_R   sort        id
+
+run                500000
+
+undump             vels
+undump             vels_L
+undump             vels_R
+	           	
+#  *************************** The third stage  ************************
+# **************************** Reset langevin thermostats to zero energy accumulation ******************
+# **************************** Thermal conductivity (NEMD) calculation ************************
+# **************************** Reset time step *************************
+
+reset_timestep             0
+
+# Reset langevin thermostats
+
+fix                Hot     hot       langevin    ${T_hight}  ${T_hight}     ${random_seed}     ${hot_velocity}     tally   yes
+fix                Cold    cold      langevin    ${T_low}    ${T_low}       ${random_seed}     ${cold_velocity}    tally   yes    #langevin
+
+thermo_style       custom   step   temp   lx   ly   lz   c_Thot   c_Tcold   c_Ftemp   f_Hot   f_Cold   v_tdiff 
+thermo_modify      lost     warn   flush   yes
+
+fix                hot1        hot         ave/time   10   100   1000    f_Hot     file    hot.txt
+fix                cold1       cold        ave/time   10   100   1000    f_Cold    file    cold.txt
+
+compute         BLOCKSZ_40        main_main    chunk/atom  bin/1d   y  lower    ${average_40}     units  box
+
+fix             T_PROFILEZ_40     main_main    ave/chunk  100  30000  3000000   BLOCKSZ_40   v_TEMP  file  temp_40.txt
+
+compute         BLOCKSZ_50        main_main    chunk/atom  bin/1d   y  lower    ${average_50}     units  box
+
+fix             T_PROFILEZ_50     main_main    ave/chunk  100  30000  3000000   BLOCKSZ_50   v_TEMP  file  temp_50.txt
+
+compute         BLOCKS_1          main_1       chunk/atom  bin/1d  y  lower     ${average_1}     units  box
+fix             T_PROFILE_1       main_1       ave/chunk  100  30000  3000000   BLOCKS_1     v_TEMP  file  temp_1.txt
+
+compute         BLOCKSZ_2         main_2       chunk/atom  bin/1d  y  lower     ${average_2}     units  box
+
+fix             T_PROFILEZ_2      main_2       ave/chunk  100  30000  3000000   BLOCKSZ_2    v_TEMP  file  temp_2.txt
+
+## *********************  Run enough time ***********************
+
+restart             3000000      thermal.*.restart
+
+run                 6000000

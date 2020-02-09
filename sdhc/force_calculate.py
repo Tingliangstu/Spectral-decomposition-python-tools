@@ -23,7 +23,7 @@ class fcCalc(object):
     (2) `liblammps.so` available for the Python package.
     :param fileprefix: File prefix (TODO What is this)
     :type fileprefix: str
-    :param restartfile: LAMMPS restart file (TODO What is this)
+    :param restartfile: LAMMPS restart file (The restart file is also required, but here not as an attribute)  
     :type restartfile: str
     """
     def __init__(self, fileprefix):
@@ -51,7 +51,7 @@ class fcCalc(object):
         :type fileprefix: str
         :param w_interface: Width of the area of atoms to include in the interface, defaults to 6.0
         :type w_interface: float, optional
-        :param show_log: 
+        :param show_log: Whether to write the log file to the generate_force.log file, if true, no log file will be generated. (default False)
         :type show_log: boolean, optional
         :return: None
         """

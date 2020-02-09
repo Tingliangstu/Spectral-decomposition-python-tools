@@ -281,8 +281,10 @@ class fcCalc(object):
                 # print fc2[index]                   ## Print the force (negative direction) of the current atom (if you need to check)
                 # Fill one row of spring constant matrix
                 
-                '''Calculate the force on all atoms in 
-                the interface due to the current atom's displacement'''
+                '''
+                Calculate the force on all atoms in 
+                the right group due to the current atom's displacement (on the left)
+                '''
                 
                 Kij[3 * i1 + direction, :] = (fc2[inds_right_1d] - fc1[inds_right_1d]) / (2.0 * hstep)   ## fc2 - fc1 (Yes) ---- (Negative-Positive)
                 yc[index] += hstep
